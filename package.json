@@ -1,0 +1,50 @@
+{
+  "name": "consiler",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal AI task organizer with Discord 1:1 thread mirror, multimodal triage, background web research, and Kanban dashboard.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "dev:web": "vite --config src/web/vite.config.ts",
+    "build:web": "vite build --config src/web/vite.config.ts",
+    "build:server": "tsc -p tsconfig.json",
+    "build": "npm run build:web && npm run build:server",
+    "start": "node dist/server/index.js",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "better-sqlite3": "^11.9.1",
+    "cheerio": "^1.0.0",
+    "cookie-parser": "^1.4.7",
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "lucide-react": "^0.511.0",
+    "multer": "^1.4.5-lts.2",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.65.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.6",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^5.0.1",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.15.3",
+    "@types/node-cron": "^3.0.11",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "tailwindcss": "^4.1.6",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

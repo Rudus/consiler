@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --paper-bg: #F4F1EA;
+    --paper-surface: #FAF8F3;
+    --paper-elevated: #FDFCF9;
+    --paper-stone: #EAE5D9;
+    --paper-border: #DDD6C7;
+    --ink-primary: #1F1E1B;
+    --ink-secondary: #5C584F;
+    --ink-muted: #8E897E;
+    --accent-sage: #4A7C6A;
+    --accent-blue: #4B6E84;
+    --accent-ochre: #9C6B30;
+    --accent-rust: #A94B3E;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--paper-bg);
+    color: var(--ink-primary);
+  }
+}
+
+.font-serif-editorial {
+  font-family: 'Newsreader', Georgia, 'Times New Roman', serif;
+}
+
+.font-mono-spec {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Subtle Midori MD-inspired dot grid canvas */
+.bg-dot-grid {
+  background-color: #F4F1EA;
+  background-image: radial-gradient(#D5CEC0 0.9px, transparent 0.9px);
+  background-size: 20px 20px;
+}
+
+/* Delicate binding tape rib texture for the notebook spine */
+.spine-binding-strip {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(214, 207, 192, 0.45) 0px,
+    rgba(214, 207, 192, 0.45) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+}
+
+/* Editorial prose styling on warm ivory paper */
+.prose h1, .prose h2, .prose h3, .prose h4 {
+  font-family: 'Newsreader', Georgia, serif;
+  color: #1F1E1B;
+  font-weight: 500;
+  margin-top: 1em;
+  margin-bottom: 0.4em;
+  letter-spacing: -0.01em;
+}
+.prose h1 { font-size: 1.25rem; }
+.prose h2 { font-size: 1.1rem; }
+.prose h3 { font-size: 0.98rem; }
+.prose p {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+  line-height: 1.65;
+  color: #36332D;
+}
+.prose ul, .prose ol {
+  padding-left: 1.25rem;
+  margin: 0.5em 0;
+  color: #36332D;
+}
+.prose ul { list-style-type: disc; }
+.prose ol { list-style-type: decimal; }
+.prose li { margin: 0.25em 0; }
+.prose strong {
+  color: #1F1E1B;
+  font-weight: 600;
+}
+.prose a {
+  color: #3D6B5B;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(61, 107, 91, 0.4);
+}
+.prose a:hover {
+  color: #2C5043;
+  text-decoration-color: #2C5043;
+}
+.prose blockquote {
+  border-left: 2px solid #4A7C6A;
+  padding-left: 0.85rem;
+  color: #5C584F;
+  font-style: italic;
+  margin: 0.6em 0;
+}
+.prose pre {
+  background: #EFECE3;
+  border: 1px solid #DDD6C7;
+  border-radius: 0.5rem;
+  padding: 0.8rem;
+  overflow-x: auto;
+  margin: 0.65em 0;
+}
+.prose code {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84em;
+  background: rgba(221, 214, 199, 0.55);
+  color: #2B2924;
+  padding: 0.12em 0.38em;
+  border-radius: 0.25rem;
+}
+.prose pre code {
+  background: transparent;
+  padding: 0;
+}
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75em 0;
+  font-size: 0.82em;
+}
+.prose th, .prose td {
+  border: 1px solid #DDD6C7;
+  padding: 0.45rem 0.65rem;
+  text-align: left;
+}
+.prose th {
+  background: #EAE5D9;
+  color: #1F1E1B;
+  font-weight: 600;
+}
+
+/* Clean warm archival scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(142, 137, 126, 0.35);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(142, 137, 126, 0.6);
+}
