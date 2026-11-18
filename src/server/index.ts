@@ -3,7 +3,7 @@ import path from 'node:path';
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import { config, ensureDataDirs } from './config.js';
-import { initDb } from './db.js';
+import { closeDb, initDb } from './db.js';
 import { startDiscordBot } from './discord/bot.js';
 import { authRouter } from './routes/auth.js';
 import { checkoutRouter } from './routes/checkout.js';
@@ -18,7 +18,7 @@ async function bootstrap(): Promise<void> {
   initDb();
 
   const app = express();
-  app.use(express.json({ limit: '15mb' }));
+  app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
   app.get('/api/health', (_req, res) => {
@@ -66,6 +66,7 @@ async function bootstrap(): Promise<void> {
     if (discordClient) {
       await discordClient.destroy();
     }
+    closeDb();
     server.close(() => process.exit(0));
   };
 
