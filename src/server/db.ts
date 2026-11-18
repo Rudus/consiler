@@ -192,6 +192,18 @@ export function getDb(): Database.Database {
   return dbInstance;
 }
 
+export function closeDb(): void {
+  if (dbInstance) {
+    try {
+      dbInstance.pragma('wal_checkpoint(TRUNCATE)');
+    } catch {
+      // ignore checkpoint errors when closing
+    }
+    dbInstance.close();
+    dbInstance = null;
+  }
+}
+
 function parseJsonArray<T>(raw: string | null | undefined, fallback: T[]): T[] {
   if (!raw) return fallback;
   try {
