@@ -167,6 +167,13 @@ export interface TaskDetail {
   discordThreadId: string | null;
   needsClarification: boolean;
   clarificationQuestion: string | null;
+  googleEventId: string | null;
+  googleEventHtmlLink: string | null;
+  googleEventStart: string | null;
+  googleEventEnd: string | null;
+  googleEventAllDay: boolean;
+  googleEventLocation: string | null;
+  googleEventAutoAdded: boolean;
   createdAt: string;
   updatedAt: string;
   checklist: ChecklistItem[];
@@ -182,5 +189,7 @@ export interface AuthState {
   authRequired: boolean;
   discordEnabled: boolean;
   aiEnabled: boolean;
+  calendarEnabled: boolean;
+  calendarName: string;
   timezone: string;
 }

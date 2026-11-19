@@ -5,6 +5,7 @@ import {
   EmbedBuilder,
 } from 'discord.js';
 import { config } from '../config.js';
+import { formatCalendarEventWhenPl } from '../services/googleCalendar.js';
 import type {
   CheckoutSession,
   TaskColumn,
@@ -86,6 +87,26 @@ export function buildTaskEmbed(task: TaskDetail): EmbedBuilder {
       inline: true,
     });
   }
+  if (task.googleEventId) {
+    const when = formatCalendarEventWhenPl(
+      task.googleEventStart,
+      task.googleEventEnd,
+      task.googleEventAllDay,
+      config.TIMEZONE
+    );
+    const autoLabel = task.googleEventAutoAdded ? ' *(auto)*' : '';
+    const locLabel = task.googleEventLocation
+      ? `\n📍 ${task.googleEventLocation}`
+      : '';
+    const valueText = task.googleEventHtmlLink
+      ? `[${when}](${task.googleEventHtmlLink})${autoLabel}${locLabel}`
+      : `${when}${autoLabel}${locLabel}`;
+    embed.addFields({
+      name: `🗓️ Kalendarz „${config.GOOGLE_CALENDAR_NAME}”`,
+      value: valueText.slice(0, 1000),
+      inline: false,
+    });
+  }
   if (task.needsClarification && task.clarificationQuestion) {
     embed.addFields({
       name: '❓ Pytanie asystenta',
@@ -98,7 +119,8 @@ export function buildTaskEmbed(task: TaskDetail): EmbedBuilder {
 }
 
 export function buildTaskActionRow(
-  task: TaskDetail
+  task: TaskDetail,
+  calendarEnabled: boolean = config.calendarEnabled
 ): ActionRowBuilder<ButtonBuilder> {
   const isDone = task.columnStatus === 'done';
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -126,6 +148,28 @@ export function buildTaskActionRow(
       .setStyle(ButtonStyle.Primary)
       .setDisabled(task.columnStatus === 'ai_processing')
   );
+
+  if (calendarEnabled) {
+    if (task.googleEventId) {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`task_calendar_remove:${task.id}`)
+          .setLabel('Usuń z kalendarza')
+          .setEmoji('🗑️')
+          .setStyle(ButtonStyle.Danger)
+      );
+    } else {
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`task_calendar_add:${task.id}`)
+          .setLabel('Do kalendarza')
+          .setEmoji('🗓️')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(isDone)
+      );
+    }
+  }
+
   return row;
 }
 

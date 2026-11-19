@@ -32,9 +32,16 @@ import {
 import { enqueueBackgroundWork } from '../ai/researchWorker.js';
 import {
   deleteDiscordTaskResources,
+  postTextToDiscordThread,
   refreshTaskEmbedOnDiscord,
   setDiscordThreadArchived,
 } from '../discord/bridge.js';
+import {
+  formatCalendarEventWhenPl,
+  removeTaskFromCalendar,
+  syncTaskToCalendar,
+  updateLinkedCalendarEventForTask,
+} from '../services/googleCalendar.js';
 import {
   createTaskFromWeb,
   handleWebUserMessage,
@@ -137,6 +144,18 @@ tasksRouter.patch('/:id', async (req, res) => {
   eventBus.broadcast('task:updated', updated.id, updated);
   void refreshTaskEmbedOnDiscord(updated);
 
+  const titleChanged =
+    parsed.data.title !== undefined && updated.title !== prev.title;
+  const dueAtChanged = Boolean(
+    parsed.data.dueAt && parsed.data.dueAt !== prev.dueAt
+  );
+  if (updated.googleEventId && (titleChanged || dueAtChanged)) {
+    void updateLinkedCalendarEventForTask(updated, {
+      titleChanged,
+      dueAtChanged,
+    });
+  }
+
   if (
     parsed.data.columnStatus &&
     parsed.data.columnStatus !== prev.columnStatus
@@ -148,6 +167,85 @@ tasksRouter.patch('/:id', async (req, res) => {
   }
 
   res.json({ task: updated });
+});
+
+const SyncCalendarSchema = z.object({
+  start: z.string().min(1).optional(),
+  end: z.string().nullable().optional(),
+  allDay: z.boolean().optional(),
+  location: z.string().max(300).nullable().optional(),
+  title: z.string().min(1).max(160).optional(),
+});
+
+tasksRouter.post('/:id/calendar', async (req, res) => {
+  const parsed = SyncCalendarSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Nieprawidłowe dane wydarzenia kalendarza.' });
+    return;
+  }
+
+  const existing = getTaskDetail(req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: 'Zadanie nie istnieje.' });
+    return;
+  }
+
+  try {
+    const { task, event } = await syncTaskToCalendar(existing.id, {
+      ...parsed.data,
+      autoAdded: false,
+    });
+    const when = formatCalendarEventWhenPl(
+      task.googleEventStart,
+      task.googleEventEnd,
+      task.googleEventAllDay,
+      config.TIMEZONE
+    );
+    if (task.discordThreadId) {
+      void postTextToDiscordThread({
+        task,
+        author: 'system',
+        text: `🗓️ **Dodano do kalendarza „${config.GOOGLE_CALENDAR_NAME}”:** ${when}${task.googleEventLocation ? ` (${task.googleEventLocation})` : ''}`,
+        recordInDb: true,
+      });
+    }
+    res.json({ ok: true, task, event });
+  } catch (err) {
+    res.status(400).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Nie udało się zapisać wydarzenia w kalendarzu.',
+    });
+  }
+});
+
+tasksRouter.delete('/:id/calendar', async (req, res) => {
+  const existing = getTaskDetail(req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: 'Zadanie nie istnieje.' });
+    return;
+  }
+
+  try {
+    const result = await removeTaskFromCalendar(existing.id);
+    if (result.removed && result.task.discordThreadId) {
+      void postTextToDiscordThread({
+        task: result.task,
+        author: 'system',
+        text: `🗑️ **Usunięto wydarzenie z kalendarza „${config.GOOGLE_CALENDAR_NAME}”.** (Zadanie pozostaje na tablicy.)`,
+        recordInDb: true,
+      });
+    }
+    res.json({ ok: true, task: result.task, removed: result.removed });
+  } catch (err) {
+    res.status(502).json({
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Nie udało się usunąć wydarzenia z kalendarza.',
+    });
+  }
 });
 
 tasksRouter.delete('/:id', async (req, res) => {

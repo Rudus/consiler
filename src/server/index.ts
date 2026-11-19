@@ -6,6 +6,7 @@ import { config, ensureDataDirs } from './config.js';
 import { closeDb, initDb } from './db.js';
 import { startDiscordBot } from './discord/bot.js';
 import { authRouter } from './routes/auth.js';
+import { calendarRouter } from './routes/calendar.js';
 import { checkoutRouter } from './routes/checkout.js';
 import { eventsRouter } from './routes/events.js';
 import { tasksRouter } from './routes/tasks.js';
@@ -26,6 +27,7 @@ async function bootstrap(): Promise<void> {
   });
 
   app.use('/api/auth', authRouter);
+  app.use('/api/calendar', calendarRouter);
   app.use('/api/checkout', checkoutRouter);
   app.use('/api/tasks', tasksRouter);
   app.use('/api/events', eventsRouter);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +20,7 @@ import {
   getCheckoutSession,
   getDueReminders,
   getTaskByDiscordThreadId,
+  getTaskByGoogleEventId,
   getTaskDetail,
   initDb,
   listTasks,
@@ -34,7 +36,18 @@ import {
   applyUserActionOnBone,
   buildFallbackFishbone,
 } from '../src/server/ai/fishboneAgent.js';
-import { chunkDiscordText } from '../src/server/discord/formatting.js';
+import {
+  buildTaskActionRow,
+  chunkDiscordText,
+} from '../src/server/discord/formatting.js';
+import {
+  addDaysToYmd,
+  buildGoogleEventTimePayload,
+  buildGoogleRemindersPayload,
+  createServiceAccountJwt,
+  getLocalDayBoundsIso,
+  shouldAutoSyncTriageToCalendar,
+} from '../src/server/services/googleCalendar.js';
 import {
   isSearchOrListingIndexUrl,
   sanitizeUrlPathSlashes,
@@ -629,5 +642,225 @@ test('Fishbone (Graf Rybiej Ości): spine lifecycle, bone artifacts, and variant
 
   const cleared = deleteTaskFishbone(task.id);
   assert.equal(cleared?.fishbone, null);
+  deleteTask(task.id);
+});
+
+test('SQLite repository: Google Calendar fields lifecycle & getTaskByGoogleEventId', () => {
+  initDb(dbFile);
+
+  const task = createTask({
+    title: 'Urodziny Zosi',
+    userPrompt: 'Zaproszenie na sobotę na 15:00',
+    category: 'Dom',
+  });
+  assert.equal(task.googleEventId, null);
+  assert.equal(task.googleEventAllDay, false);
+  assert.equal(task.googleEventAutoAdded, false);
+
+  const updated = updateTask(task.id, {
+    googleEventId: 'gcal-ev-123',
+    googleEventHtmlLink: 'https://calendar.google.com/event?eid=123',
+    googleEventStart: '2026-11-28T15:00:00+01:00',
+    googleEventEnd: '2026-11-28T17:00:00+01:00',
+    googleEventAllDay: false,
+    googleEventLocation: 'Sala Zabaw Fikołki',
+    googleEventAutoAdded: true,
+  });
+
+  assert.equal(updated?.googleEventId, 'gcal-ev-123');
+  assert.equal(updated?.googleEventLocation, 'Sala Zabaw Fikołki');
+  assert.equal(updated?.googleEventAutoAdded, true);
+
+  const byEvent = getTaskByGoogleEventId('gcal-ev-123');
+  assert.equal(byEvent?.id, task.id);
+
+  const cleared = updateTask(task.id, {
+    googleEventId: null,
+    googleEventHtmlLink: null,
+    googleEventStart: null,
+    googleEventEnd: null,
+    googleEventAllDay: false,
+    googleEventLocation: null,
+    googleEventAutoAdded: false,
+  });
+  assert.equal(cleared?.googleEventId, null);
+  assert.equal(cleared?.googleEventAutoAdded, false);
+  assert.equal(getTaskByGoogleEventId('gcal-ev-123'), null);
+
+  deleteTask(task.id);
+});
+
+test('Google Calendar helpers: auto-sync gate, time/all-day payloads, reminders, and Warsaw day bounds', () => {
+  assert.equal(
+    shouldAutoSyncTriageToCalendar(
+      { shouldAddToCalendar: true, calendarEventStart: '2026-11-25T16:00:00+01:00' },
+      true
+    ),
+    true
+  );
+  assert.equal(
+    shouldAutoSyncTriageToCalendar(
+      { shouldAddToCalendar: true, calendarEventStart: '2026-11-25' },
+      true
+    ),
+    true
+  );
+  assert.equal(
+    shouldAutoSyncTriageToCalendar(
+      { shouldAddToCalendar: false, calendarEventStart: '2026-11-25T16:00:00+01:00' },
+      true
+    ),
+    false
+  );
+  assert.equal(
+    shouldAutoSyncTriageToCalendar(
+      { shouldAddToCalendar: true, calendarEventStart: null },
+      true
+    ),
+    false
+  );
+  assert.equal(
+    shouldAutoSyncTriageToCalendar(
+      { shouldAddToCalendar: true, calendarEventStart: '2026-11-25T16:00:00+01:00' },
+      false
+    ),
+    false
+  );
+
+  // DST-safe date arithmetic across October clock change
+  assert.equal(addDaysToYmd('2026-10-25', 1), '2026-10-26');
+  assert.equal(addDaysToYmd('2026-03-29', 1), '2026-03-30');
+
+  // Timed event POST vs PATCH
+  const timedPost = buildGoogleEventTimePayload({
+    start: '2026-11-25T16:00:00+01:00',
+    allDay: false,
+    timeZone: 'Europe/Warsaw',
+    forPatch: false,
+  });
+  assert.equal(timedPost.allDay, false);
+  assert.equal(timedPost.start.dateTime, '2026-11-25T15:00:00.000Z');
+  assert.equal(timedPost.end.dateTime, '2026-11-25T16:00:00.000Z');
+  assert.equal(timedPost.start.timeZone, 'Europe/Warsaw');
+  assert.equal('date' in timedPost.start, false);
+
+  const timedPatch = buildGoogleEventTimePayload({
+    start: '2026-11-25T16:00:00+01:00',
+    allDay: false,
+    timeZone: 'Europe/Warsaw',
+    forPatch: true,
+  });
+  assert.equal(timedPatch.start.date, null);
+  assert.equal(timedPatch.end.date, null);
+
+  // All-day event POST vs PATCH (Google end.date is exclusive)
+  const allDayPost = buildGoogleEventTimePayload({
+    start: '2026-11-25',
+    allDay: true,
+    timeZone: 'Europe/Warsaw',
+    forPatch: false,
+  });
+  assert.equal(allDayPost.allDay, true);
+  assert.equal(allDayPost.start.date, '2026-11-25');
+  assert.equal(allDayPost.end.date, '2026-11-26');
+  assert.equal('dateTime' in allDayPost.start, false);
+
+  const allDayPatch = buildGoogleEventTimePayload({
+    start: '2026-11-25',
+    allDay: true,
+    timeZone: 'Europe/Warsaw',
+    forPatch: true,
+  });
+  assert.equal(allDayPatch.start.dateTime, null);
+  assert.equal(allDayPatch.end.dateTime, null);
+
+  // Reminders payload
+  assert.deepEqual(buildGoogleRemindersPayload(undefined), { useDefault: true });
+  assert.deepEqual(buildGoogleRemindersPayload([1440, 30, -5, 999999]), {
+    useDefault: false,
+    overrides: [
+      { method: 'popup', minutes: 1440 },
+      { method: 'popup', minutes: 30 },
+      { method: 'popup', minutes: 0 },
+      { method: 'popup', minutes: 40320 },
+    ],
+  });
+
+  // Europe/Warsaw day bounds (winter CET = +1h, summer CEST = +2h)
+  const winterBounds = getLocalDayBoundsIso(
+    new Date('2026-11-19T12:00:00Z'),
+    'Europe/Warsaw'
+  );
+  assert.equal(winterBounds.startIso, '2026-11-18T23:00:00.000Z');
+  assert.equal(winterBounds.endIso, '2026-11-19T22:59:59.999Z');
+
+  const summerBounds = getLocalDayBoundsIso(
+    new Date('2026-07-15T12:00:00Z'),
+    'Europe/Warsaw'
+  );
+  assert.equal(summerBounds.startIso, '2026-07-14T22:00:00.000Z');
+  assert.equal(summerBounds.endIso, '2026-07-15T21:59:59.999Z');
+});
+
+test('createServiceAccountJwt generates a valid RS256-signed Google OAuth JWT', () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+
+  const nowSec = 1_795_000_000;
+  const jwt = createServiceAccountJwt(
+    {
+      client_email: 'consiler-bot@test-project.iam.gserviceaccount.com',
+      private_key: privateKey,
+      token_uri: 'https://oauth2.googleapis.com/token',
+    },
+    'https://www.googleapis.com/auth/calendar',
+    nowSec
+  );
+
+  const parts = jwt.split('.');
+  assert.equal(parts.length, 3);
+
+  const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+  const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  assert.equal(header.alg, 'RS256');
+  assert.equal(header.typ, 'JWT');
+  assert.equal(payload.iss, 'consiler-bot@test-project.iam.gserviceaccount.com');
+  assert.equal(payload.scope, 'https://www.googleapis.com/auth/calendar');
+  assert.equal(payload.aud, 'https://oauth2.googleapis.com/token');
+  assert.equal(payload.iat, nowSec);
+  assert.equal(payload.exp, nowSec + 3600);
+
+  const verifier = crypto.createVerify('RSA-SHA256');
+  verifier.update(`${parts[0]}.${parts[1]}`);
+  verifier.end();
+  assert.equal(verifier.verify(publicKey, parts[2], 'base64url'), true);
+});
+
+test('buildTaskActionRow renders contextual calendar button within Discord 5-button row limit', () => {
+  initDb(dbFile);
+  const task = createTask({ title: 'Wizyta u weterynarza' });
+
+  const rowDisabled = buildTaskActionRow(task, false);
+  assert.equal(rowDisabled.components.length, 4);
+
+  const rowAdd = buildTaskActionRow(task, true);
+  assert.equal(rowAdd.components.length, 5);
+  const addJson = rowAdd.components[4].toJSON() as { custom_id?: string; label?: string };
+  assert.equal(addJson.custom_id, `task_calendar_add:${task.id}`);
+  assert.equal(addJson.label, 'Do kalendarza');
+
+  const withEvent = updateTask(task.id, {
+    googleEventId: 'ev-999',
+    googleEventStart: '2026-11-25T16:00:00+01:00',
+  })!;
+  const rowRemove = buildTaskActionRow(withEvent, true);
+  assert.equal(rowRemove.components.length, 5);
+  const removeJson = rowRemove.components[4].toJSON() as { custom_id?: string; label?: string };
+  assert.equal(removeJson.custom_id, `task_calendar_remove:${task.id}`);
+  assert.equal(removeJson.label, 'Usuń z kalendarza');
+
   deleteTask(task.id);
 });

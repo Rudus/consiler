@@ -16,6 +16,8 @@ authRouter.get('/me', (req, res) => {
     authRequired: isAuthRequired(),
     discordEnabled: config.discordEnabled,
     aiEnabled: config.aiEnabled,
+    calendarEnabled: config.calendarEnabled,
+    calendarName: config.GOOGLE_CALENDAR_NAME,
     timezone: config.TIMEZONE,
   });
 });

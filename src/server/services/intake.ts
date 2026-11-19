@@ -26,6 +26,11 @@ import {
   refreshTaskEmbedOnDiscord,
 } from '../discord/bridge.js';
 import { chunkDiscordText, formatDatePl } from '../discord/formatting.js';
+import {
+  formatCalendarEventWhenPl,
+  shouldAutoSyncTriageToCalendar,
+  syncTaskToCalendar,
+} from './googleCalendar.js';
 import type { TaskAttachment, TaskColumn, TaskDetail } from '../types.js';
 
 export interface UploadedLocalFile {
@@ -33,6 +38,45 @@ export interface UploadedLocalFile {
   originalName: string;
   mimeType: string;
   sizeBytes: number;
+}
+
+interface TriageCalendarMeta {
+  autoAdded: boolean;
+  reason?: string | null;
+  error?: string | null;
+  unconfiguredDate?: string | null;
+}
+
+async function autoSyncTaskFromTriage(
+  taskId: string,
+  triage: Awaited<ReturnType<typeof runTriage>>
+): Promise<TriageCalendarMeta> {
+  if (shouldAutoSyncTriageToCalendar(triage, config.calendarEnabled)) {
+    try {
+      await syncTaskToCalendar(taskId, {
+        start: triage.calendarEventStart,
+        end: triage.calendarEventEnd,
+        allDay: triage.calendarEventAllDay,
+        location: triage.calendarEventLocation,
+        autoAdded: true,
+        skipDiscordRefresh: true,
+      });
+      return { autoAdded: true, reason: triage.calendarEventReason };
+    } catch (err) {
+      log.error('GoogleCalendar', `Błąd auto-zapisu wydarzenia dla zadania ${taskId}`, err);
+      return {
+        autoAdded: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+  if (triage.shouldAddToCalendar && !config.calendarEnabled) {
+    return {
+      autoAdded: false,
+      unconfiguredDate: triage.calendarEventStart,
+    };
+  }
+  return { autoAdded: false };
 }
 
 function determineInitialColumn(
@@ -45,7 +89,10 @@ function determineInitialColumn(
   return 'ready_inbox';
 }
 
-function buildTriageConfirmationText(task: TaskDetail): string {
+function buildTriageConfirmationText(
+  task: TaskDetail,
+  calendarMeta?: TriageCalendarMeta
+): string {
   const lines: string[] = [];
   lines.push(`📌 **Zapisano na tablicy:** ${task.title}`);
   if (task.dueAt) {
@@ -53,6 +100,39 @@ function buildTriageConfirmationText(task: TaskDetail): string {
   }
   if (task.reminderAt) {
     lines.push(`⏰ **Przypomnienie:** ${formatDatePl(task.reminderAt)}`);
+  }
+  if (calendarMeta?.autoAdded && task.googleEventId) {
+    const when = formatCalendarEventWhenPl(
+      task.googleEventStart,
+      task.googleEventEnd,
+      task.googleEventAllDay,
+      config.TIMEZONE
+    );
+    const loc = task.googleEventLocation ? ` (${task.googleEventLocation})` : '';
+    lines.push(
+      `🗓️ **Dodano automatycznie do kalendarza „${config.GOOGLE_CALENDAR_NAME}”:** ${when}${loc}`
+    );
+    if (calendarMeta.reason) {
+      lines.push(`• *Powód:* ${calendarMeta.reason}`);
+    }
+    if (task.googleEventHtmlLink) {
+      lines.push(
+        `• 🔗 [Otwórz w Google Calendar](${task.googleEventHtmlLink}) *(jeśli to pomyłka, kliknij poniżej **„Usuń z kalendarza”**)*`
+      );
+    } else {
+      lines.push(
+        `• *(Jeśli to pomyłka, kliknij poniżej **„Usuń z kalendarza”**)*`
+      );
+    }
+  } else if (calendarMeta?.error) {
+    lines.push(
+      `⚠️ **Kalendarz „${config.GOOGLE_CALENDAR_NAME}”:** wykryto konkretne wydarzenie, ale nie udało się zapisać (${calendarMeta.error}).`
+    );
+  } else if (calendarMeta?.unconfiguredDate) {
+    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(calendarMeta.unconfiguredDate);
+    lines.push(
+      `ℹ️ **Kalendarz „${config.GOOGLE_CALENDAR_NAME}”:** wykryto konkretne wydarzenie (${formatCalendarEventWhenPl(calendarMeta.unconfiguredDate, null, isDateOnly, config.TIMEZONE)}), ale kalendarz nie jest jeszcze podpięty w \`.env\`.`
+    );
   }
   if (task.backgroundTaskType !== 'NONE') {
     const label =
@@ -130,6 +210,8 @@ export async function createTaskFromWeb(
     });
   }
 
+  const calendarMeta = await autoSyncTaskFromTriage(task.id, triage);
+
   task = getTaskDetail(task.id)!;
   eventBus.broadcast('task:created', task.id, task);
 
@@ -140,8 +222,9 @@ export async function createTaskFromWeb(
       await postTextToDiscordThread({
         task: mirrored,
         author: 'assistant',
-        text: buildTriageConfirmationText(mirrored),
+        text: buildTriageConfirmationText(mirrored, calendarMeta),
         recordInDb: true,
+        withActionButtons: Boolean(mirrored.googleEventId),
       });
     }
     if (mirrored.backgroundTaskType !== 'NONE') {
@@ -285,10 +368,15 @@ export async function createTaskFromDiscord(message: Message): Promise<void> {
     });
   }
 
+  const calendarMeta = await autoSyncTaskFromTriage(task.id, triage);
+
   task = getTaskDetail(task.id)!;
   eventBus.broadcast('task:created', task.id, task);
 
-  await postStatusCardInThread(task, buildTriageConfirmationText(task));
+  await postStatusCardInThread(
+    task,
+    buildTriageConfirmationText(task, calendarMeta)
+  );
 
   if (task.backgroundTaskType !== 'NONE') {
     enqueueBackgroundWork(task.id);

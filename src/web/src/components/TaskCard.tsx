@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Bell,
   Calendar,
+  CalendarCheck,
   Check,
   CheckSquare,
   Loader2,
@@ -78,6 +79,7 @@ export function TaskCard({
     boneCount > 0 ||
     (task.artifacts?.length ?? 0) > 0 ||
     Boolean(task.researchReport) ||
+    Boolean(task.googleEventId) ||
     Boolean(task.dueAt) ||
     Boolean(task.reminderAt && !task.reminderSentAt) ||
     task.checklist.length > 0 ||
@@ -196,6 +198,15 @@ export function TaskCard({
             <span className="inline-flex items-center gap-1 text-[#4B6E84]">
               <Sparkles className="h-3 w-3" strokeWidth={1.75} />
               raport
+            </span>
+          )}
+          {task.googleEventId && (
+            <span
+              title="Zapisano w Kalendarzu Google „Dom”"
+              className="inline-flex items-center gap-1 text-[#4A7C6A] font-medium"
+            >
+              <CalendarCheck className="h-3 w-3" strokeWidth={1.75} />
+              Dom
             </span>
           )}
           {task.dueAt && (

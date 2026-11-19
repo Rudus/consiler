@@ -50,6 +50,22 @@ Lekki, bezpieczny asystent organizacji zadań łączący bota na Discordzie z ta
 
 ---
 
+## Konfiguracja Kalendarza Google „Dom” (Service Account — 3 minuty)
+
+1. Wejdź do [Google Cloud Console](https://console.cloud.google.com/), utwórz lub wybierz darmowy projekt i włącz **Google Calendar API** (*APIs & Services -> Library*).
+2. Wejdź w *IAM & Admin -> Service Accounts* -> **Create Service Account** (np. `consiler-calendar`), a potem w zakładce **Keys -> Add Key -> Create new key -> JSON**.
+3. Pobrany plik klucza zapisz jako `data/google-service-account.json` (katalog `data/` jest w `.gitignore` i automatycznie montowany w Dockerze).
+4. W przeglądarce otwórz ustawienia swojego kalendarza **„Dom”** w Google Calendar:
+   - W sekcji **Udostępnij określonym osobom i grupom** dodaj adres `client_email` z pliku JSON (np. `consiler-calendar@...iam.gserviceaccount.com`) z uprawnieniem **„Wprowadzanie zmian w wydarzeniach”**.
+   - Z sekcji **Integrowanie kalendarza** skopiuj **Identyfikator kalendarza** (np. `...@group.calendar.google.com`).
+5. Uzupełnij w `.env`:
+   - `GOOGLE_CALENDAR_ID=<skopiowany identyfikator>`
+   - `GOOGLE_CALENDAR_NAME=Dom`
+   - `GOOGLE_SERVICE_ACCOUNT_PATH=./data/google-service-account.json`
+6. Po uruchomieniu aplikacji możesz sprawdzić połączenie wchodząc (po zalogowaniu do tablicy) na `/api/calendar/status?verify=1`.
+
+---
+
 ## Wdrożenie na VPS (Docker)
 
 ```bash

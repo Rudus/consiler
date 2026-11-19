@@ -29,9 +29,17 @@ const EnvSchema = z.object({
     .default('true')
     .transform((v) => v.toLowerCase() !== 'false' && v !== '0'),
   CHECKOUT_MAX_AMOUNT_PLN: z.coerce.number().positive().default(500),
+
+  GOOGLE_CALENDAR_ID: z.string().default(''),
+  GOOGLE_CALENDAR_NAME: z.string().default('Dom'),
+  GOOGLE_SERVICE_ACCOUNT_PATH: z.string().default(''),
+  GOOGLE_SERVICE_ACCOUNT_JSON: z.string().default(''),
 });
 
 const parsed = EnvSchema.parse(process.env);
+const googleServiceAccountPath = parsed.GOOGLE_SERVICE_ACCOUNT_PATH.trim()
+  ? path.resolve(parsed.GOOGLE_SERVICE_ACCOUNT_PATH.trim())
+  : '';
 
 export const config = {
   ...parsed,
@@ -40,12 +48,18 @@ export const config = {
   checkoutSessionsDir: path.resolve(parsed.DATA_DIR, 'checkout_sessions'),
   checkoutProfilePath: path.resolve(parsed.DATA_DIR, 'checkout_profile.enc'),
   dbPath: path.resolve(parsed.DATA_DIR, 'consiler.db'),
+  googleServiceAccountPath,
   discordEnabled: Boolean(
     parsed.DISCORD_BOT_TOKEN &&
       parsed.DISCORD_INBOX_CHANNEL_ID &&
       parsed.ALLOWED_DISCORD_USER_ID
   ),
   aiEnabled: Boolean(parsed.GEMINI_API_KEY),
+  calendarEnabled: Boolean(
+    parsed.GOOGLE_CALENDAR_ID.trim() &&
+      (parsed.GOOGLE_SERVICE_ACCOUNT_JSON.trim() ||
+        (googleServiceAccountPath && fs.existsSync(googleServiceAccountPath)))
+  ),
 };
 
 export function ensureDataDirs(): void {

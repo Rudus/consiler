@@ -169,6 +169,34 @@ export function initDb(dbPath: string = config.dbPath): Database.Database {
       `ALTER TABLE tasks ADD COLUMN is_pinned_big_thing INTEGER NOT NULL DEFAULT 0`
     );
   }
+  if (!taskCols.has('google_event_id')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN google_event_id TEXT`);
+  }
+  if (!taskCols.has('google_event_html_link')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN google_event_html_link TEXT`);
+  }
+  if (!taskCols.has('google_event_start')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN google_event_start TEXT`);
+  }
+  if (!taskCols.has('google_event_end')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN google_event_end TEXT`);
+  }
+  if (!taskCols.has('google_event_all_day')) {
+    db.exec(
+      `ALTER TABLE tasks ADD COLUMN google_event_all_day INTEGER NOT NULL DEFAULT 0`
+    );
+  }
+  if (!taskCols.has('google_event_location')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN google_event_location TEXT`);
+  }
+  if (!taskCols.has('google_event_auto_added')) {
+    db.exec(
+      `ALTER TABLE tasks ADD COLUMN google_event_auto_added INTEGER NOT NULL DEFAULT 0`
+    );
+  }
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_tasks_google_event ON tasks(google_event_id)`
+  );
 
   const artifactCols = new Set(
     (
@@ -240,6 +268,13 @@ function mapTaskRow(row: Record<string, unknown>): Task {
     discordThreadId: (row.discord_thread_id as string | null) ?? null,
     needsClarification: Boolean(row.needs_clarification),
     clarificationQuestion: (row.clarification_question as string | null) ?? null,
+    googleEventId: (row.google_event_id as string | null) ?? null,
+    googleEventHtmlLink: (row.google_event_html_link as string | null) ?? null,
+    googleEventStart: (row.google_event_start as string | null) ?? null,
+    googleEventEnd: (row.google_event_end as string | null) ?? null,
+    googleEventAllDay: Boolean(row.google_event_all_day),
+    googleEventLocation: (row.google_event_location as string | null) ?? null,
+    googleEventAutoAdded: Boolean(row.google_event_auto_added),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -400,6 +435,13 @@ export interface CreateTaskInput {
   discordThreadId?: string | null;
   needsClarification?: boolean;
   clarificationQuestion?: string | null;
+  googleEventId?: string | null;
+  googleEventHtmlLink?: string | null;
+  googleEventStart?: string | null;
+  googleEventEnd?: string | null;
+  googleEventAllDay?: boolean;
+  googleEventLocation?: string | null;
+  googleEventAutoAdded?: boolean;
   checklistTexts?: string[];
 }
 
@@ -413,8 +455,11 @@ export function createTask(input: CreateTaskInput): TaskDetail {
       id, title, user_prompt, ai_summary, ai_reasoning, column_status,
       priority, category, tags_json, background_task_type, background_prompt,
       due_at, reminder_at, discord_channel_id, discord_message_id, discord_thread_id,
-      needs_clarification, clarification_question, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      needs_clarification, clarification_question,
+      google_event_id, google_event_html_link, google_event_start, google_event_end,
+      google_event_all_day, google_event_location, google_event_auto_added,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.title,
@@ -434,6 +479,13 @@ export function createTask(input: CreateTaskInput): TaskDetail {
     input.discordThreadId ?? null,
     input.needsClarification ? 1 : 0,
     input.clarificationQuestion ?? null,
+    input.googleEventId ?? null,
+    input.googleEventHtmlLink ?? null,
+    input.googleEventStart ?? null,
+    input.googleEventEnd ?? null,
+    input.googleEventAllDay ? 1 : 0,
+    input.googleEventLocation ?? null,
+    input.googleEventAutoAdded ? 1 : 0,
     now,
     now
   );
@@ -615,6 +667,15 @@ export function getTaskByDiscordThreadId(threadId: string): TaskDetail | null {
   return getTaskDetail(row.id);
 }
 
+export function getTaskByGoogleEventId(googleEventId: string): TaskDetail | null {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT id FROM tasks WHERE google_event_id = ?`)
+    .get(googleEventId) as { id: string } | undefined;
+  if (!row) return null;
+  return getTaskDetail(row.id);
+}
+
 export interface UpdateTaskInput {
   title?: string;
   aiSummary?: string;
@@ -635,6 +696,13 @@ export interface UpdateTaskInput {
   discordThreadId?: string | null;
   needsClarification?: boolean;
   clarificationQuestion?: string | null;
+  googleEventId?: string | null;
+  googleEventHtmlLink?: string | null;
+  googleEventStart?: string | null;
+  googleEventEnd?: string | null;
+  googleEventAllDay?: boolean;
+  googleEventLocation?: string | null;
+  googleEventAutoAdded?: boolean;
 }
 
 export function updateTask(
@@ -687,6 +755,20 @@ export function updateTask(
     push('needs_clarification', patch.needsClarification ? 1 : 0);
   if (patch.clarificationQuestion !== undefined)
     push('clarification_question', patch.clarificationQuestion);
+  if (patch.googleEventId !== undefined)
+    push('google_event_id', patch.googleEventId);
+  if (patch.googleEventHtmlLink !== undefined)
+    push('google_event_html_link', patch.googleEventHtmlLink);
+  if (patch.googleEventStart !== undefined)
+    push('google_event_start', patch.googleEventStart);
+  if (patch.googleEventEnd !== undefined)
+    push('google_event_end', patch.googleEventEnd);
+  if (patch.googleEventAllDay !== undefined)
+    push('google_event_all_day', patch.googleEventAllDay ? 1 : 0);
+  if (patch.googleEventLocation !== undefined)
+    push('google_event_location', patch.googleEventLocation);
+  if (patch.googleEventAutoAdded !== undefined)
+    push('google_event_auto_added', patch.googleEventAutoAdded ? 1 : 0);
 
   if (fields.length === 0) return existing;
 

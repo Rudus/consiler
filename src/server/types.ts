@@ -137,6 +137,19 @@ export interface CheckoutProfile {
   notes: string;
 }
 
+export interface CalendarEventSummary {
+  id: string;
+  summary: string;
+  description: string | null;
+  location: string | null;
+  start: string;
+  end: string;
+  allDay: boolean;
+  htmlLink: string | null;
+  status: string;
+  consilerTaskId: string | null;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -159,6 +172,13 @@ export interface Task {
   discordThreadId: string | null;
   needsClarification: boolean;
   clarificationQuestion: string | null;
+  googleEventId: string | null;
+  googleEventHtmlLink: string | null;
+  googleEventStart: string | null;
+  googleEventEnd: string | null;
+  googleEventAllDay: boolean;
+  googleEventLocation: string | null;
+  googleEventAutoAdded: boolean;
   createdAt: string;
   updatedAt: string;
 }

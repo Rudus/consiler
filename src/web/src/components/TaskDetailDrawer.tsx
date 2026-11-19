@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm';
 import {
   Bot,
   Calendar,
+  CalendarCheck,
+  CalendarPlus,
   Check,
   CheckSquare,
   ChevronDown,
@@ -11,6 +13,7 @@ import {
   Copy,
   ExternalLink,
   Loader2,
+  MapPin,
   MessageSquare,
   Package,
   Plus,
@@ -60,10 +63,85 @@ function formatCompactDateTime(iso: string | null): string {
   }).format(d);
 }
 
+function addDaysYmdWeb(ymd: string, days: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return ymd;
+  const utc = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days);
+  return new Date(utc).toISOString().slice(0, 10);
+}
+
+function formatCalendarWhenWeb(
+  start: string | null,
+  end: string | null,
+  allDay: boolean
+): string {
+  if (!start) return '—';
+  if (allDay || /^\d{4}-\d{2}-\d{2}$/.test(start.trim())) {
+    const startYmd = start.trim().slice(0, 10);
+    const fmt = new Intl.DateTimeFormat('pl-PL', {
+      timeZone: 'UTC',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+    const startLabel = fmt.format(new Date(`${startYmd}T12:00:00Z`));
+    if (end && /^\d{4}-\d{2}-\d{2}$/.test(end.trim())) {
+      const nextDay = addDaysYmdWeb(startYmd, 1);
+      if (end.trim() > nextDay) {
+        const inclusiveEnd = addDaysYmdWeb(end.trim(), -1);
+        return `${startLabel} – ${fmt.format(new Date(`${inclusiveEnd}T12:00:00Z`))} (cały dzień)`;
+      }
+    }
+    return `${startLabel} (cały dzień)`;
+  }
+  const startDate = new Date(start);
+  if (Number.isNaN(startDate.getTime())) return start;
+  const startFmt = new Intl.DateTimeFormat('pl-PL', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(startDate);
+  if (!end) return startFmt;
+  const endDate = new Date(end);
+  if (Number.isNaN(endDate.getTime())) return startFmt;
+  if (startDate.toDateString() === endDate.toDateString()) {
+    const endTime = new Intl.DateTimeFormat('pl-PL', {
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(endDate);
+    return `${startFmt}–${endTime}`;
+  }
+  const endFmt = new Intl.DateTimeFormat('pl-PL', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(endDate);
+  return `${startFmt} – ${endFmt}`;
+}
+
+function defaultCalendarLocalInput(task: TaskDetail): string {
+  const existing = task.googleEventStart || task.dueAt || task.reminderAt;
+  if (existing) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(existing.trim())) {
+      return `${existing.trim()}T09:00`;
+    }
+    const parsed = toLocalDatetimeInput(existing);
+    if (parsed) return parsed;
+  }
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  tomorrow.setHours(9, 0, 0, 0);
+  return toLocalDatetimeInput(tomorrow.toISOString());
+}
+
 type DrawerTab = 'overview' | 'fishbone' | 'research' | 'chat';
 
 interface TaskDetailDrawerProps {
   task: TaskDetail | null;
+  calendarEnabled?: boolean;
+  calendarName?: string;
   onClose: () => void;
   onUpdated: (task: TaskDetail) => void;
   onDeleted: (taskId: string) => void;
@@ -73,6 +151,8 @@ interface TaskDetailDrawerProps {
 
 export function TaskDetailDrawer({
   task,
+  calendarEnabled = false,
+  calendarName = 'Dom',
   onClose,
   onUpdated,
   onDeleted,
@@ -95,6 +175,12 @@ export function TaskDetailDrawer({
   const [artTitle, setArtTitle] = useState('');
   const [artUrl, setArtUrl] = useState('');
   const [artContent, setArtContent] = useState('');
+  const [calendarBusy, setCalendarBusy] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [calendarFormOpen, setCalendarFormOpen] = useState(false);
+  const [calAllDay, setCalAllDay] = useState(false);
+  const [calStartInput, setCalStartInput] = useState('');
+  const [calLocation, setCalLocation] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -109,6 +195,15 @@ export function TaskDetailDrawer({
     setResearchView((task.artifacts?.length ?? 0) > 0 ? 'artifacts' : 'report');
     setShowAddArtifact(false);
     setDetailsOpen(false);
+    setCalendarError(null);
+    setCalendarFormOpen(false);
+    setCalAllDay(task.googleEventAllDay);
+    setCalLocation(task.googleEventLocation ?? '');
+    setCalStartInput(
+      task.googleEventAllDay && task.googleEventStart
+        ? task.googleEventStart.slice(0, 10)
+        : defaultCalendarLocalInput(task)
+    );
   }, [task?.id]);
 
   if (!task) return null;
@@ -161,6 +256,88 @@ export function TaskDetailDrawer({
     await api.deleteTask(task.id);
     onDeleted(task.id);
     onClose();
+  };
+
+  const handleQuickAddToCalendar = async () => {
+    if (calendarBusy) return;
+    if (!task.dueAt && !task.reminderAt) {
+      setCalStartInput(defaultCalendarLocalInput(task));
+      setCalAllDay(false);
+      setCalendarFormOpen(true);
+      return;
+    }
+    setCalendarBusy(true);
+    setCalendarError(null);
+    try {
+      const res = await api.addTaskToCalendar(task.id);
+      onUpdated(res.task);
+    } catch (err) {
+      setCalendarError(
+        err instanceof Error
+          ? err.message
+          : 'Nie udało się dodać do kalendarza.'
+      );
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  const handleSaveCalendarForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (calendarBusy) return;
+    let startVal = '';
+    if (calAllDay) {
+      startVal = calStartInput.slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startVal)) {
+        setCalendarError('Wybierz poprawną datę wydarzenia.');
+        return;
+      }
+    } else {
+      const iso = fromLocalDatetimeInput(calStartInput);
+      if (!iso) {
+        setCalendarError('Wybierz poprawną datę i godzinę wydarzenia.');
+        return;
+      }
+      startVal = iso;
+    }
+
+    setCalendarBusy(true);
+    setCalendarError(null);
+    try {
+      const res = await api.addTaskToCalendar(task.id, {
+        start: startVal,
+        allDay: calAllDay,
+        location: calLocation.trim() || null,
+      });
+      onUpdated(res.task);
+      setCalendarFormOpen(false);
+    } catch (err) {
+      setCalendarError(
+        err instanceof Error
+          ? err.message
+          : 'Nie udało się zapisać wydarzenia w kalendarzu.'
+      );
+    } finally {
+      setCalendarBusy(false);
+    }
+  };
+
+  const handleRemoveFromCalendar = async () => {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    setCalendarError(null);
+    try {
+      const res = await api.removeTaskFromCalendar(task.id);
+      onUpdated(res.task);
+    } catch (err) {
+      setCalendarError(
+        err instanceof Error
+          ? err.message
+          : 'Nie udało się usunąć wydarzenia z kalendarza.'
+      );
+    } finally {
+      setCalendarBusy(false);
+    }
   };
 
   const completedChecklist = task.checklist.filter((c) => c.completed).length;
@@ -359,6 +536,226 @@ export function TaskDetailDrawer({
                     {task.aiSummary}
                   </p>
                 </div>
+              )}
+
+              {/* Google Calendar ("Dom") Section */}
+              {(task.googleEventId || calendarEnabled) && (
+                <section
+                  className={`rounded-lg border px-4 py-3 space-y-2.5 ${
+                    task.googleEventId
+                      ? 'border-[#C6D6CF] bg-[#E8F0EC]/55'
+                      : 'border-[#DDD6C7] bg-[#F4F1EA]/65'
+                  }`}
+                >
+                  {task.googleEventId ? (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <CalendarCheck
+                            className="h-4 w-4 text-[#2F5949] shrink-0"
+                            strokeWidth={1.8}
+                          />
+                          <span className="font-mono-spec text-[10px] tracking-[0.14em] uppercase text-[#2F5949] font-medium">
+                            Kalendarz Google „{calendarName}”
+                          </span>
+                          {task.googleEventAutoAdded && (
+                            <span className="rounded bg-[#DCE8E2] border border-[#B7CEC3] px-1.5 py-0.5 font-mono-spec text-[9.5px] uppercase tracking-[0.08em] text-[#2F5949]">
+                              Dodano automatycznie
+                            </span>
+                          )}
+                        </div>
+
+                        {task.googleEventHtmlLink && (
+                          <a
+                            href={task.googleEventHtmlLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-[#2F5949] hover:underline"
+                          >
+                            <span>Otwórz w Google Calendar</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 text-xs text-[#2B2924]">
+                        <div className="font-medium">
+                          {formatCalendarWhenWeb(
+                            task.googleEventStart,
+                            task.googleEventEnd,
+                            task.googleEventAllDay
+                          )}
+                        </div>
+                        {task.googleEventLocation && (
+                          <div className="inline-flex items-center gap-1 text-[#5C584F]">
+                            <MapPin className="h-3 w-3 shrink-0 text-[#4A7C6A]" />
+                            <span>{task.googleEventLocation}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <span className="text-[11px] text-[#5C584F]">
+                          {task.googleEventAutoAdded
+                            ? 'Jeśli bot pomylił się z rozpoznaniem wydarzenia, możesz cofnąć jednym kliknięciem:'
+                            : 'Zsynchronizowano z kalendarzem domowym.'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleRemoveFromCalendar()}
+                          disabled={calendarBusy}
+                          className="inline-flex items-center gap-1.5 rounded border border-[#E5C9C4] bg-[#FDFCF9] hover:bg-[#F7EAE8] disabled:opacity-50 px-2.5 py-1 text-[11px] font-medium text-[#A94B3E] transition"
+                        >
+                          {calendarBusy ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3 w-3" />
+                          )}
+                          <span>Usuń z kalendarza</span>
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <CalendarPlus
+                            className="h-4 w-4 text-[#7A7468] shrink-0"
+                            strokeWidth={1.7}
+                          />
+                          <div>
+                            <div className="font-mono-spec text-[10px] tracking-[0.14em] uppercase text-[#5C584F]">
+                              Kalendarz „{calendarName}”
+                            </div>
+                            <div className="text-[11px] text-[#7A7468]">
+                              {task.dueAt || task.reminderAt
+                                ? `Zadanie nie jest w kalendarzu (termin na tablicy: ${formatCompactDateTime(task.dueAt || task.reminderAt)}).`
+                                : 'Dodaj ręcznie, jeśli to sprecyzowane wydarzenie.'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          {(task.dueAt || task.reminderAt) && !calendarFormOpen && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCalAllDay(false);
+                                setCalStartInput(defaultCalendarLocalInput(task));
+                                setCalendarFormOpen(true);
+                              }}
+                              className="rounded border border-[#DDD6C7] bg-[#FDFCF9] hover:bg-[#EFECE3] px-2 py-1 text-[11px] text-[#5C584F] transition"
+                            >
+                              Wybierz termin
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void handleQuickAddToCalendar()}
+                            disabled={calendarBusy}
+                            className="inline-flex items-center gap-1.5 rounded border border-[#C6D6CF] bg-[#E8F0EC] hover:bg-[#DCE8E2] disabled:opacity-50 px-2.5 py-1 text-[11px] font-medium text-[#2F5949] transition"
+                          >
+                            {calendarBusy ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <CalendarPlus className="h-3 w-3" />
+                            )}
+                            <span>Dodaj do kalendarza „{calendarName}”</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {calendarFormOpen && (
+                        <form
+                          onSubmit={(e) => void handleSaveCalendarForm(e)}
+                          className="pt-2 border-t border-[#DDD6C7] space-y-2.5"
+                        >
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block font-mono-spec text-[9.5px] tracking-[0.1em] uppercase text-[#7A7468] mb-1">
+                                {calAllDay ? 'Data wydarzenia' : 'Data i godzina'}
+                              </label>
+                              <input
+                                type={calAllDay ? 'date' : 'datetime-local'}
+                                value={
+                                  calAllDay
+                                    ? calStartInput.slice(0, 10)
+                                    : calStartInput
+                                }
+                                onChange={(e) => setCalStartInput(e.target.value)}
+                                required
+                                className="w-full rounded border border-[#DDD6C7] bg-[#FDFCF9] px-2.5 py-1.5 text-xs text-[#1F1E1B] focus:border-[#4A7C6A] focus:outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="block font-mono-spec text-[9.5px] tracking-[0.1em] uppercase text-[#7A7468] mb-1">
+                                Miejsce (opcjonalnie)
+                              </label>
+                              <input
+                                type="text"
+                                value={calLocation}
+                                onChange={(e) => setCalLocation(e.target.value)}
+                                placeholder="np. ul. Polna 12 / Przychodnia"
+                                className="w-full rounded border border-[#DDD6C7] bg-[#FDFCF9] px-2.5 py-1.5 text-xs text-[#1F1E1B] placeholder:text-[#9A9488] focus:border-[#4A7C6A] focus:outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <label className="inline-flex items-center gap-1.5 text-xs text-[#36332D] cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={calAllDay}
+                                onChange={(e) => {
+                                  const next = e.target.checked;
+                                  setCalAllDay(next);
+                                  if (next) {
+                                    setCalStartInput((cur) =>
+                                      (cur || defaultCalendarLocalInput(task)).slice(0, 10)
+                                    );
+                                  } else {
+                                    setCalStartInput((cur) => {
+                                      const base = (cur || defaultCalendarLocalInput(task)).slice(0, 10);
+                                      return `${base}T09:00`;
+                                    });
+                                  }
+                                }}
+                                className="rounded border-[#CFC8B8] text-[#4A7C6A] focus:ring-[#4A7C6A]"
+                              />
+                              <span>Cały dzień</span>
+                            </label>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setCalendarFormOpen(false)}
+                                className="rounded px-2.5 py-1 text-xs text-[#7A7468] hover:text-[#1F1E1B]"
+                              >
+                                Anuluj
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={calendarBusy}
+                                className="inline-flex items-center gap-1.5 rounded bg-[#1F1E1B] hover:bg-[#33312C] disabled:opacity-50 px-3 py-1 text-xs font-medium text-[#FAF8F3]"
+                              >
+                                {calendarBusy && (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                )}
+                                <span>Zapisz w kalendarzu</span>
+                              </button>
+                            </div>
+                          </div>
+                        </form>
+                      )}
+                    </>
+                  )}
+
+                  {calendarError && (
+                    <p className="text-[11px] text-[#A94B3E] pt-1">
+                      ⚠️ {calendarError}
+                    </p>
+                  )}
+                </section>
               )}
 
               {/* Checklist */}

@@ -7,8 +7,24 @@ import {
   sendDiscordReminder,
 } from './discord/bridge.js';
 import { formatDatePl } from './discord/formatting.js';
+import { log } from './logger.js';
+import {
+  getLocalDayBoundsIso,
+  listCalendarEvents,
+} from './services/googleCalendar.js';
+import type { CalendarEventSummary } from './types.js';
 
 let tasksList: cron.ScheduledTask[] = [];
+
+function formatEventTimePl(iso: string, timeZone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat('pl-PL', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+}
 
 async function checkReminders(): Promise<void> {
   const nowIso = new Date().toISOString();
@@ -29,11 +45,32 @@ async function checkReminders(): Promise<void> {
 async function runDailyDigest(): Promise<void> {
   if (!config.discordEnabled) return;
   const all = listTasks().filter((t) => t.columnStatus !== 'done');
-  if (all.length === 0) return;
-
   const now = new Date();
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
+  const bounds = getLocalDayBoundsIso(now, config.TIMEZONE);
+
+  let calendarToday: CalendarEventSummary[] = [];
+  if (config.calendarEnabled) {
+    try {
+      calendarToday = await listCalendarEvents({
+        timeMin: bounds.startIso,
+        timeMax: bounds.endIso,
+      });
+    } catch (err) {
+      log.error('Scheduler', 'Nie udało się pobrać wydarzeń z kalendarza do Daily Digest', err);
+    }
+  }
+
+  if (all.length === 0 && calendarToday.length === 0) return;
+
+  const startMs = new Date(bounds.startIso).getTime();
+  const endMs = new Date(bounds.endIso).getTime();
+
+  const calendarEventIds = new Set(calendarToday.map((e) => e.id));
+  const calendarTaskIds = new Set(
+    calendarToday
+      .map((e) => e.consilerTaskId)
+      .filter((id): id is string => Boolean(id))
+  );
 
   const overdue = all.filter(
     (t) => t.dueAt && new Date(t.dueAt).getTime() < now.getTime()
@@ -41,14 +78,21 @@ async function runDailyDigest(): Promise<void> {
   const today = all.filter(
     (t) =>
       t.dueAt &&
-      new Date(t.dueAt).getTime() >= now.getTime() &&
-      new Date(t.dueAt).getTime() <= endOfToday.getTime()
+      new Date(t.dueAt).getTime() >= Math.max(now.getTime(), startMs) &&
+      new Date(t.dueAt).getTime() <= endMs &&
+      !(t.googleEventId && calendarEventIds.has(t.googleEventId)) &&
+      !calendarTaskIds.has(t.id)
   );
   const readyResearch = all.filter(
     (t) => t.columnStatus === 'ready_inbox' && Boolean(t.researchReport)
   );
 
-  if (overdue.length === 0 && today.length === 0 && readyResearch.length === 0) {
+  if (
+    calendarToday.length === 0 &&
+    overdue.length === 0 &&
+    today.length === 0 &&
+    readyResearch.length === 0
+  ) {
     return;
   }
 
@@ -60,6 +104,18 @@ async function runDailyDigest(): Promise<void> {
     '',
   ];
 
+  if (calendarToday.length > 0) {
+    lines.push(`🗓️ **Kalendarz „${config.GOOGLE_CALENDAR_NAME}” na dziś:**`);
+    for (const ev of calendarToday.slice(0, 10)) {
+      const when = ev.allDay
+        ? 'Cały dzień'
+        : formatEventTimePl(ev.start, config.TIMEZONE);
+      const loc = ev.location ? ` *(${ev.location})*` : '';
+      lines.push(`• **${when}** — ${ev.summary}${loc}`);
+    }
+    lines.push('');
+  }
+
   if (overdue.length > 0) {
     lines.push('🔴 **Zaległe terminy:**');
     for (const t of overdue.slice(0, 6)) {
@@ -69,7 +125,7 @@ async function runDailyDigest(): Promise<void> {
   }
 
   if (today.length > 0) {
-    lines.push('📅 **Na dziś:**');
+    lines.push('📅 **Na dziś (zadania):**');
     for (const t of today.slice(0, 8)) {
       lines.push(`• **${t.title}** (${formatDatePl(t.dueAt)})`);
     }

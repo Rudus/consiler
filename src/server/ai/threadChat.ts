@@ -33,6 +33,13 @@ import {
   inspectAndVerifyUrl,
   sanitizeUrlPathSlashes,
 } from './webExtractor.js';
+import {
+  formatCalendarEventWhenPl,
+  listCalendarEvents,
+  removeTaskFromCalendar,
+  syncTaskToCalendar,
+  updateLinkedCalendarEventForTask,
+} from '../services/googleCalendar.js';
 import { log } from '../logger.js';
 
 const THREAD_TOOLS: FunctionDeclaration[] = [
@@ -182,6 +189,53 @@ const THREAD_TOOLS: FunctionDeclaration[] = [
       },
     },
   },
+  {
+    name: 'add_task_to_calendar',
+    description:
+      'Dodaje bieżące zadanie do Google Calendar „Dom” (lub aktualizuje powiązane wydarzenie). Wywołuj TYLKO gdy użytkownik wyraźnie poprosi w wątku o dodanie/zmianę w kalendarzu.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        start: {
+          type: Type.STRING,
+          description: 'Opcjonalna data/godzina startu (ISO-8601 lub YYYY-MM-DD); jeśli brak, użyje terminu zadania.',
+          nullable: true,
+        },
+        end: { type: Type.STRING, nullable: true },
+        allDay: { type: Type.BOOLEAN, nullable: true },
+        title: { type: Type.STRING, nullable: true },
+        location: { type: Type.STRING, nullable: true },
+        description: { type: Type.STRING, nullable: true },
+        reminderMinutes: {
+          type: Type.ARRAY,
+          items: { type: Type.INTEGER },
+          nullable: true,
+        },
+      },
+    },
+  },
+  {
+    name: 'remove_task_from_calendar',
+    description:
+      'Usuwa powiązane wydarzenie tego zadania z Google Calendar „Dom” (zadanie zostaje na tablicy).',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {},
+    },
+  },
+  {
+    name: 'list_calendar_events',
+    description:
+      'Odczytuje wydarzenia z Google Calendar „Dom” w podanym zakresie czasu (np. do sprawdzenia kolizji lub wolnych terminów).',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        fromIso: { type: Type.STRING },
+        toIso: { type: Type.STRING },
+      },
+      required: ['fromIso', 'toIso'],
+    },
+  },
 ];
 
 function normalizeOptionalIso(val: unknown): string | null | undefined {
@@ -249,6 +303,11 @@ export async function runThreadAssistantTurn(
     `Kolumna: ${task.columnStatus} | Priorytet: ${task.priority} | Kategoria: ${task.category}`,
     `Termin (dueAt): ${task.dueAt ?? 'brak'}`,
     `Przypomnienie (reminderAt): ${task.reminderAt ?? 'brak'}`,
+    `Kalendarz „${config.GOOGLE_CALENDAR_NAME}”: ${
+      task.googleEventId
+        ? `DODANE (eventId: ${task.googleEventId}, kiedy: ${formatCalendarEventWhenPl(task.googleEventStart, task.googleEventEnd, task.googleEventAllDay, config.TIMEZONE)}${task.googleEventLocation ? `, miejsce: ${task.googleEventLocation}` : ''})`
+        : 'nie dodane'
+    } | status połączenia: ${config.calendarEnabled ? 'POŁĄCZONY' : 'WYŁĄCZONY'}`,
     `Podsumowanie AI: ${task.aiSummary}`,
     task.researchReport
       ? `Aktualny raport researchu/szkicu:\n${task.researchReport.slice(0, 4000)}`
@@ -286,7 +345,11 @@ export async function runThreadAssistantTurn(
           model: config.GEMINI_TRIAGE_MODEL,
           contents,
           config: {
-            systemInstruction: buildThreadChatPrompt(nowIso, config.TIMEZONE),
+            systemInstruction: buildThreadChatPrompt(
+              nowIso,
+              config.TIMEZONE,
+              config.GOOGLE_CALENDAR_NAME
+            ),
             tools: [{ functionDeclarations: THREAD_TOOLS }],
           },
         },
@@ -314,6 +377,8 @@ export async function runThreadAssistantTurn(
         let toolResult: Record<string, unknown> = { ok: true };
 
         if (name === 'update_task') {
+          const prevTitle = task.title;
+          const prevDueAt = task.dueAt;
           const patch: Parameters<typeof updateTask>[1] = {};
           if (typeof args.title === 'string' && args.title.trim()) {
             patch.title = args.title.trim().slice(0, 120);
@@ -341,6 +406,18 @@ export async function runThreadAssistantTurn(
               await setDiscordThreadArchived(updated.discordThreadId, true);
             } else if (patch.columnStatus !== undefined) {
               await setDiscordThreadArchived(updated.discordThreadId, false);
+            }
+
+            const titleChanged = updated.title !== prevTitle;
+            const dueAtChanged = Boolean(
+              updated.dueAt && updated.dueAt !== prevDueAt
+            );
+            if (updated.googleEventId && (titleChanged || dueAtChanged)) {
+              await updateLinkedCalendarEventForTask(updated, {
+                titleChanged,
+                dueAtChanged,
+              });
+              task = getTaskDetail(taskId) ?? updated;
             }
           }
           toolResult = {
@@ -552,6 +629,87 @@ export async function runThreadAssistantTurn(
                   err instanceof Error
                     ? err.message
                     : 'Nie udało się uruchomić przygotowania zakupu.',
+              };
+            }
+          }
+        } else if (name === 'add_task_to_calendar') {
+          if (!config.calendarEnabled) {
+            toolResult = {
+              ok: false,
+              error: 'Kalendarz Google nie jest jeszcze skonfigurowany w .env.',
+            };
+          } else {
+            try {
+              const reminderMinutes = Array.isArray(args.reminderMinutes)
+                ? args.reminderMinutes.filter((m): m is number => typeof m === 'number')
+                : undefined;
+              const synced = await syncTaskToCalendar(taskId, {
+                start: typeof args.start === 'string' ? args.start : undefined,
+                end: typeof args.end === 'string' ? args.end : undefined,
+                allDay:
+                  typeof args.allDay === 'boolean' ? args.allDay : undefined,
+                title: typeof args.title === 'string' ? args.title : undefined,
+                location:
+                  typeof args.location === 'string' ? args.location : undefined,
+                description:
+                  typeof args.description === 'string'
+                    ? args.description
+                    : undefined,
+                reminderMinutes,
+                autoAdded: false,
+              });
+              task = synced.task;
+              toolResult = {
+                ok: true,
+                eventId: synced.event.id,
+                htmlLink: synced.event.htmlLink,
+                when: formatCalendarEventWhenPl(
+                  synced.event.start,
+                  synced.event.end,
+                  synced.event.allDay,
+                  config.TIMEZONE
+                ),
+              };
+            } catch (err) {
+              toolResult = {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              };
+            }
+          }
+        } else if (name === 'remove_task_from_calendar') {
+          try {
+            const res = await removeTaskFromCalendar(taskId);
+            task = res.task;
+            toolResult = { ok: true, removed: res.removed };
+          } catch (err) {
+            toolResult = {
+              ok: false,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        } else if (name === 'list_calendar_events') {
+          if (!config.calendarEnabled) {
+            toolResult = {
+              ok: false,
+              error: 'Kalendarz Google nie jest jeszcze skonfigurowany w .env.',
+            };
+          } else {
+            try {
+              const events = await listCalendarEvents({
+                timeMin: String(args.fromIso ?? ''),
+                timeMax: String(args.toIso ?? ''),
+              });
+              toolResult = {
+                ok: true,
+                calendarName: config.GOOGLE_CALENDAR_NAME,
+                count: events.length,
+                events,
+              };
+            } catch (err) {
+              toolResult = {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
               };
             }
           }

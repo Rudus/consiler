@@ -8,6 +8,7 @@ import type {
 } from '../types.js';
 import { getGenAI, generateWithTimeout, loadAttachmentsAsParts } from './client.js';
 import { buildTriageSystemPrompt } from './prompts.js';
+import { formatDateInTimezoneYmd } from '../services/googleCalendar.js';
 import { log } from '../logger.js';
 
 const TriageSchema = z.object({
@@ -26,6 +27,12 @@ const TriageSchema = z.object({
   checklist: z.array(z.string()).default([]),
   needsClarification: z.boolean().default(false),
   clarificationQuestion: z.string().nullable().default(null),
+  shouldAddToCalendar: z.boolean().default(false),
+  calendarEventStart: z.string().nullable().default(null),
+  calendarEventEnd: z.string().nullable().default(null),
+  calendarEventAllDay: z.boolean().default(false),
+  calendarEventLocation: z.string().nullable().default(null),
+  calendarEventReason: z.string().nullable().default(null),
 });
 
 export type TriageResult = z.infer<typeof TriageSchema>;
@@ -35,6 +42,24 @@ function normalizeIsoOrNull(val: string | null | undefined): string | null {
   const date = new Date(val);
   if (Number.isNaN(date.getTime())) return null;
   return date.toISOString();
+}
+
+function normalizeCalendarDateOrIso(
+  val: string | null | undefined,
+  allDay: boolean,
+  timeZone: string
+): string | null {
+  if (!val || !val.trim()) return null;
+  const trimmed = val.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const d = new Date(trimmed);
+  if (Number.isNaN(d.getTime())) return null;
+  if (allDay) {
+    return formatDateInTimezoneYmd(d, timeZone);
+  }
+  return d.toISOString();
 }
 
 export async function runTriage(
@@ -61,6 +86,12 @@ export async function runTriage(
       checklist: [],
       needsClarification: false,
       clarificationQuestion: null,
+      shouldAddToCalendar: false,
+      calendarEventStart: null,
+      calendarEventEnd: null,
+      calendarEventAllDay: false,
+      calendarEventLocation: null,
+      calendarEventReason: null,
     };
   }
 
@@ -82,7 +113,11 @@ export async function runTriage(
         model: config.GEMINI_TRIAGE_MODEL,
         contents: [{ role: 'user', parts }],
         config: {
-          systemInstruction: buildTriageSystemPrompt(nowIso, config.TIMEZONE),
+          systemInstruction: buildTriageSystemPrompt(
+            nowIso,
+            config.TIMEZONE,
+            config.GOOGLE_CALENDAR_NAME
+          ),
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -142,6 +177,37 @@ export async function runTriage(
                 type: Type.STRING,
                 nullable: true,
               },
+              shouldAddToCalendar: {
+                type: Type.BOOLEAN,
+                description:
+                  'True WYŁĄCZNIE dla prawdziwych, sprecyzowanych wydarzeń z konkretną datą (zaproszenie, wizyta, rezerwacja, umówione spotkanie) lub wyraźnej prośby użytkownika.',
+              },
+              calendarEventStart: {
+                type: Type.STRING,
+                nullable: true,
+                description:
+                  'ISO-8601 z offsetem (gdy podano godzinę) albo YYYY-MM-DD (gdy wydarzenie całodniowe), lub null.',
+              },
+              calendarEventEnd: {
+                type: Type.STRING,
+                nullable: true,
+                description:
+                  'ISO-8601 zakończenia / YYYY-MM-DD (exclusive dla całodniowych) lub null.',
+              },
+              calendarEventAllDay: {
+                type: Type.BOOLEAN,
+                description: 'True gdy wydarzenie ma tylko datę bez konkretnej godziny.',
+              },
+              calendarEventLocation: {
+                type: Type.STRING,
+                nullable: true,
+                description: 'Miejsce lub adres wydarzenia, jeśli wynika ze screena/treści.',
+              },
+              calendarEventReason: {
+                type: Type.STRING,
+                nullable: true,
+                description: 'Krótkie (1 zdanie) uzasadnienie dodania wydarzenia do kalendarza.',
+              },
             },
             required: [
               'title',
@@ -152,6 +218,7 @@ export async function runTriage(
               'tags',
               'backgroundTaskType',
               'needsClarification',
+              'shouldAddToCalendar',
             ],
           },
         },
@@ -161,10 +228,34 @@ export async function runTriage(
 
     const rawText = response.text ?? '{}';
     const parsed = TriageSchema.parse(JSON.parse(rawText));
+    const normalizedCalStart = parsed.shouldAddToCalendar
+      ? normalizeCalendarDateOrIso(
+          parsed.calendarEventStart,
+          parsed.calendarEventAllDay,
+          config.TIMEZONE
+        )
+      : null;
+    const isCalAllDay = Boolean(
+      normalizedCalStart &&
+        (parsed.calendarEventAllDay || /^\d{4}-\d{2}-\d{2}$/.test(normalizedCalStart))
+    );
+    const normalizedCalEnd = normalizedCalStart
+      ? normalizeCalendarDateOrIso(
+          parsed.calendarEventEnd,
+          isCalAllDay,
+          config.TIMEZONE
+        )
+      : null;
+    const shouldAddToCalendar = Boolean(
+      parsed.shouldAddToCalendar && normalizedCalStart
+    );
+
     log.info('Triage', `Wynik triage: "${parsed.title}"`, {
       bg: parsed.backgroundTaskType,
       dueAt: parsed.dueAt,
       reminderAt: parsed.reminderAt,
+      shouldAddToCalendar,
+      calendarEventStart: normalizedCalStart,
     });
     return {
       ...parsed,
@@ -172,6 +263,18 @@ export async function runTriage(
       dueAt: normalizeIsoOrNull(parsed.dueAt),
       reminderAt: normalizeIsoOrNull(parsed.reminderAt),
       checklist: parsed.checklist.slice(0, 5),
+      shouldAddToCalendar,
+      calendarEventStart: shouldAddToCalendar ? normalizedCalStart : null,
+      calendarEventEnd: shouldAddToCalendar ? normalizedCalEnd : null,
+      calendarEventAllDay: shouldAddToCalendar ? isCalAllDay : false,
+      calendarEventLocation:
+        shouldAddToCalendar && parsed.calendarEventLocation?.trim()
+          ? parsed.calendarEventLocation.trim()
+          : null,
+      calendarEventReason:
+        shouldAddToCalendar && parsed.calendarEventReason?.trim()
+          ? parsed.calendarEventReason.trim()
+          : null,
     };
   } catch (err) {
     log.error('Triage', 'Błąd analizy AI', err);
@@ -192,6 +295,12 @@ export async function runTriage(
       checklist: [],
       needsClarification: false,
       clarificationQuestion: null,
+      shouldAddToCalendar: false,
+      calendarEventStart: null,
+      calendarEventEnd: null,
+      calendarEventAllDay: false,
+      calendarEventLocation: null,
+      calendarEventReason: null,
     };
   }
 }

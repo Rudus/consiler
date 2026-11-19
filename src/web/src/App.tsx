@@ -332,6 +332,8 @@ export function App() {
 
       <TaskDetailDrawer
         task={selectedTask}
+        calendarEnabled={auth.calendarEnabled}
+        calendarName={auth.calendarName}
         onClose={() => setSelectedTaskId(null)}
         onPrepareCheckout={handlePrepareCheckout}
         onOpenFullFishbone={() => setViewMode('fishbone')}

@@ -282,4 +282,39 @@ export const api = {
       `/api/checkout/${sessionId}/cancel`,
       { method: 'POST' }
     ),
+
+  getCalendarStatus: (verify = false) =>
+    apiFetch<{
+      enabled: boolean;
+      calendarName: string;
+      calendarIdConfigured: boolean;
+      verification?: {
+        ok: boolean;
+        summary?: string;
+        timeZone?: string;
+        serviceAccountEmail?: string;
+        error?: string;
+      };
+    }>(`/api/calendar/status${verify ? '?verify=1' : ''}`),
+
+  addTaskToCalendar: (
+    id: string,
+    payload?: {
+      start?: string;
+      end?: string | null;
+      allDay?: boolean;
+      location?: string | null;
+      title?: string;
+    }
+  ) =>
+    apiFetch<{ ok: boolean; task: TaskDetail }>(`/api/tasks/${id}/calendar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload ?? {}),
+    }),
+
+  removeTaskFromCalendar: (id: string) =>
+    apiFetch<{ ok: boolean; task: TaskDetail }>(`/api/tasks/${id}/calendar`, {
+      method: 'DELETE',
+    }),
 };

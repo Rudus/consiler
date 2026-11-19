@@ -169,6 +169,16 @@ export function NotebookSpine({
                 {auth.discordEnabled ? 'AKTYWNY' : 'OFFLINE'}
               </span>
             </div>
+            <div className="flex items-center justify-between text-[#36332D]">
+              <span>Kalendarz „{auth.calendarName}”</span>
+              <span
+                className={`font-mono-spec text-[11px] ${
+                  auth.calendarEnabled ? 'text-[#4A7C6A]' : 'text-[#8E897E]'
+                }`}
+              >
+                {auth.calendarEnabled ? 'AKTYWNY' : 'OFFLINE'}
+              </span>
+            </div>
             <p className="text-[11px] text-[#7A7468] pt-1 border-t border-[#EAE4D7] leading-relaxed">
               Wklej zrzut ekranu skrótem{' '}
               <kbd className="font-mono-spec px-1 py-0.5 rounded bg-[#EFECE3] border border-[#DDD6C7] text-[#1F1E1B] text-[10px]">

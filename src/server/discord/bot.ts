@@ -26,6 +26,11 @@ import {
   handleDiscordThreadMessage,
 } from '../services/intake.js';
 import {
+  formatCalendarEventWhenPl,
+  removeTaskFromCalendar,
+  syncTaskToCalendar,
+} from '../services/googleCalendar.js';
+import {
   refreshTaskEmbedOnDiscord,
   setDiscordClient,
   setDiscordThreadArchived,
@@ -219,6 +224,72 @@ async function handleButtonInteraction(
       );
       await interaction.reply({
         content: '🔍 Uruchamiam pogłębiony research w tle...',
+      });
+    }
+    return;
+  }
+
+  if (action === 'task_calendar_remove') {
+    await interaction.deferReply();
+    try {
+      const { task: updated } = await removeTaskFromCalendar(task.id);
+      await interaction.message
+        .edit({
+          embeds:
+            interaction.message.embeds.length > 0
+              ? [buildTaskEmbed(updated)]
+              : undefined,
+          components: [buildTaskActionRow(updated)],
+        })
+        .catch(() => undefined);
+      await interaction.editReply({
+        content: `🗑️ Usunięto wydarzenie **${updated.title}** z kalendarza „${config.GOOGLE_CALENDAR_NAME}”. Zadanie zostaje na tablicy.`,
+      });
+    } catch (err) {
+      await interaction.editReply({
+        content: `⚠️ Nie udało się usunąć z kalendarza: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+    return;
+  }
+
+  if (action === 'task_calendar_add') {
+    const hasDate = Boolean(
+      task.googleEventStart || task.dueAt || task.reminderAt
+    );
+    await interaction.deferReply({ ephemeral: !hasDate });
+    if (!hasDate) {
+      await interaction.editReply({
+        content:
+          '📅 To zadanie nie ma jeszcze ustalonego terminu. Napisz w wątku np. `dodaj do kalendarza w piątek o 17:00` albo ustaw termin na tablicy.',
+      });
+      return;
+    }
+    try {
+      const { task: updated } = await syncTaskToCalendar(task.id, {
+        autoAdded: false,
+      });
+      await interaction.message
+        .edit({
+          embeds:
+            interaction.message.embeds.length > 0
+              ? [buildTaskEmbed(updated)]
+              : undefined,
+          components: [buildTaskActionRow(updated)],
+        })
+        .catch(() => undefined);
+      const when = formatCalendarEventWhenPl(
+        updated.googleEventStart,
+        updated.googleEventEnd,
+        updated.googleEventAllDay,
+        config.TIMEZONE
+      );
+      await interaction.editReply({
+        content: `🗓️ Dodano **${updated.title}** do kalendarza „${config.GOOGLE_CALENDAR_NAME}” (${when}).${updated.googleEventHtmlLink ? `\n🔗 [Otwórz w Google Calendar](${updated.googleEventHtmlLink})` : ''}`,
+      });
+    } catch (err) {
+      await interaction.editReply({
+        content: `⚠️ Nie udało się dodać do kalendarza: ${err instanceof Error ? err.message : String(err)}`,
       });
     }
   }
