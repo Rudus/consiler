@@ -775,7 +775,18 @@ test('Google Calendar helpers: auto-sync gate, time/all-day payloads, reminders,
   assert.equal(allDayPatch.end.dateTime, null);
 
   // Reminders payload
-  assert.deepEqual(buildGoogleRemindersPayload(undefined), { useDefault: true });
+  assert.deepEqual(buildGoogleRemindersPayload(undefined), {
+    useDefault: false,
+    overrides: [{ method: 'popup', minutes: 60 }],
+  });
+  assert.deepEqual(buildGoogleRemindersPayload([], false), {
+    useDefault: false,
+    overrides: [{ method: 'popup', minutes: 60 }],
+  });
+  assert.deepEqual(buildGoogleRemindersPayload(undefined, true), {
+    useDefault: false,
+    overrides: [{ method: 'popup', minutes: 0 }],
+  });
   assert.deepEqual(buildGoogleRemindersPayload([1440, 30, -5, 999999]), {
     useDefault: false,
     overrides: [

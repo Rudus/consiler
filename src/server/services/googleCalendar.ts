@@ -408,13 +408,19 @@ export function buildGoogleEventTimePayload(params: {
 }
 
 export function buildGoogleRemindersPayload(
-  reminderMinutes?: number[] | null
+  reminderMinutes?: number[] | null,
+  allDay: boolean = false
 ): {
   useDefault: boolean;
   overrides?: Array<{ method: 'popup'; minutes: number }>;
 } {
+  const defaultMinutes = allDay ? 0 : 60;
+
   if (!reminderMinutes || reminderMinutes.length === 0) {
-    return { useDefault: true };
+    return {
+      useDefault: false,
+      overrides: [{ method: 'popup', minutes: defaultMinutes }],
+    };
   }
   const cleaned = Array.from(
     new Set(
@@ -425,7 +431,10 @@ export function buildGoogleRemindersPayload(
   ).slice(0, 5);
 
   if (cleaned.length === 0) {
-    return { useDefault: true };
+    return {
+      useDefault: false,
+      overrides: [{ method: 'popup', minutes: defaultMinutes }],
+    };
   }
   return {
     useDefault: false,
@@ -619,7 +628,7 @@ export async function createCalendarEvent(input: {
     summary: input.summary.trim(),
     start: times.start,
     end: times.end,
-    reminders: buildGoogleRemindersPayload(input.reminderMinutes),
+    reminders: buildGoogleRemindersPayload(input.reminderMinutes, times.allDay),
   };
   if (input.description !== undefined && input.description !== null) {
     payload.description = input.description;
@@ -681,7 +690,10 @@ export async function updateCalendarEvent(
     payload.end = times.end;
   }
   if (patch.reminderMinutes !== undefined) {
-    payload.reminders = buildGoogleRemindersPayload(patch.reminderMinutes);
+    payload.reminders = buildGoogleRemindersPayload(
+      patch.reminderMinutes,
+      Boolean(patch.allDay)
+    );
   }
 
   const updated = await calendarApiRequest<RawGoogleEvent>(
